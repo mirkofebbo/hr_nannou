@@ -113,20 +113,24 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
         }
     }
 
-    if (model.pulse > 0.6) {
-        model.stream.send(|audio| {
-            audio.hz = 880.0; // Higher pitch for strong pulse
-        })
-        .unwrap();
-        model.stream.play().unwrap();
+    let sine_pulse = (model.pulse as f64).sin();
+    model.stream.send(move |audio: &mut Audio| {
+        audio.hz = map_range(sine_pulse, 0.0, 1.0, 120.0, 880.0); // Map pulse to frequency range (440Hz to 880Hz)
+    }).unwrap();
+    // if (model.pulse > 0.6) {
+    //     model.stream.send(|audio| {
+    //         audio.hz =880.0;
+    //     })
+    //     .unwrap();
+    //     model.stream.play().unwrap();
 
-    } else {
-        model.stream.send(|audio| {
-            audio.hz = 440.0; // Lower pitch for weak pulse
-        })
-        .unwrap();
-        model.stream.pause().unwrap();
-    }
+    // } else {
+    //     model.stream.send(|audio| {
+    //         audio.hz = 440.0; // Lower pitch for weak pulse
+    //     })
+    //     .unwrap();
+    //     model.stream.pause().unwrap();
+    // }
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
