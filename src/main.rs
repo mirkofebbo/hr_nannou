@@ -16,24 +16,31 @@ struct PulseData {
     raw: f32,
 }
 
+// More sophisticated audio state
 struct Audio {
     phase: f64,
     hz: f64,
+    target_hz: f64,
+    amplitude: f32,
+    target_amplitude: f32,
+    // Add a simple smoothing factor (Liner Interpolation)
+    lerp_factor: f32,
 }
 
 struct Model {
-    pulse: f32, // Normalized 0.0 to 1.0
+    pulse: f32, 
     stream: audio::Stream<Audio>,
     receiver: mpsc::Receiver<PulseData>,
     history: Vec<f32>,
+    beat_detected: bool,
 }
 
 fn model(app: &App) -> Model {
     app.new_window().size(800, 800).view(view).build().unwrap();
 
-    // Setup Serial Communication in a separate thread
     let (tx, rx) = mpsc::channel();
-    let port_name = "/dev/cu.usbmodemDC5475C4CF702"; // Your specific port
+    // Adjust port for your OS
+    let port_name = "/dev/cu.usbmodemDC5475C4CF702"; 
     let baud_rate = 115200;
 
     thread::spawn(move || {
@@ -42,31 +49,31 @@ fn model(app: &App) -> Model {
             loop {
                 let mut line = String::new();
                 if reader.read_line(&mut line).is_ok() {
-                    // Arduino sends: displayMin,displayMax,rawValue
                     let parts: Vec<&str> = line.trim().split(',').collect();
                     if parts.len() == 3 {
                         let min = parts[0].parse::<f32>().unwrap_or(0.0);
-                        let max = parts[1].parse::<f32>().unwrap_or(1023.0);
+                        let max = parts[1].parse::<f32>().unwrap_or(1024.0);
                         let raw = parts[2].parse::<f32>().unwrap_or(0.0);
-
                         let _ = tx.send(PulseData { min, max, raw });
                     }
                 }
             }
-        } else {
-            eprintln!("Failed to open port: {}", port_name);
         }
     });
 
-    // Setup the Audio Model
-    let audio_host: audio::Host = audio::Host::new();
+    let audio_host = audio::Host::new();
     let audio_model = Audio {
         phase: 0.0,
-        hz: 0.0,
+        hz: 220.0,
+        target_hz: 220.0,
+        amplitude: 0.0,
+        target_amplitude: 0.0,
+        lerp_factor: 0.1, // Controls how "snappy" the sound changes
     };
-    let stream: nannou_audio::Stream<Audio> = audio_host
+    
+    let stream = audio_host
         .new_output_stream(audio_model)
-        .render(audio)
+        .render(audio_render)
         .build()
         .unwrap();
 
@@ -77,103 +84,96 @@ fn model(app: &App) -> Model {
         receiver: rx,
         history: Vec::new(),
         stream,
+        beat_detected: false,
     }
 }
 
-fn audio(audio: &mut Audio, buffer: &mut Buffer) {
+fn audio_render(audio: &mut Audio, buffer: &mut Buffer) {
     let sample_rate = buffer.sample_rate() as f64;
-    let volume = 0.5;
+    
     for frame in buffer.frames_mut() {
-        let sine_amp = (2.0 * PI * audio.phase).sin() as f32;
+        // Smooth transitions for frequency and amplitude to avoid clicking
+        audio.hz += (audio.target_hz - audio.hz) * 0.005; 
+        audio.amplitude += (audio.target_amplitude - audio.amplitude) * 0.01;
+
+        // Generate a slightly more complex wave (Mix of Sine and Triangle)
+        let sine = (2.0 * PI * audio.phase).sin();
+        let triangle = (2.0 * (audio.phase % 1.0) - 1.0).abs() * 2.0 - 1.0;
+        
+        // Blend 80% sine, 20% triangle for a "warmer" medical tone
+        let signal = (sine * 0.8 + triangle * 0.2) as f32;
+        
         audio.phase += audio.hz / sample_rate;
-        audio.phase %= sample_rate;
+        audio.phase %= 1.0;
+
         for channel in frame {
-            *channel = sine_amp * volume;
+            *channel = signal * audio.amplitude * 0.9;
         }
     }
 }
-
+    
 fn update(_app: &App, model: &mut Model, _update: Update) {
-    // Check for new data from the Serial thread
     while let Ok(data) = model.receiver.try_recv() {
-        // Calculate normalized pulse based on the dynamic range sent by Arduino
         let range = data.max - data.min;
-        let normalized = if range > 0.0 {
+        let normalized = if range > 1.0 {
             ((data.raw - data.min) / range).clamp(0.0, 1.0)
         } else {
-            0.5
+            0.0
         };
 
         model.pulse = normalized;
         model.history.push(normalized);
-
-        // Keep a longer history for a nicer wave (300 samples)
-        if model.history.len() > 300 {
+        if model.history.len() > 500 {
             model.history.remove(0);
         }
+
+        // Logic for "Beat Triggering"
+        let p = model.pulse;
+        model.stream.send(move |audio| {
+            audio.target_hz = map_range(p as f64, 0.0, 1.0, 50.0, 150.0);
+            
+            // Adjusted exponent from 2.0 to 1.5 to make the sound curve less aggressive,
+            // allowing the sound to be louder at mid-range pulse values.
+            audio.target_amplitude = p.powf(1.5); 
+        }).unwrap();
     }
-
-    let sine_pulse = (model.pulse as f64).sin();
-    model.stream.send(move |audio: &mut Audio| {
-        audio.hz = map_range(sine_pulse, 0.0, 1.0, 120.0, 880.0); // Map pulse to frequency range (440Hz to 880Hz)
-    }).unwrap();
-    // if (model.pulse > 0.6) {
-    //     model.stream.send(|audio| {
-    //         audio.hz =880.0;
-    //     })
-    //     .unwrap();
-    //     model.stream.play().unwrap();
-
-    // } else {
-    //     model.stream.send(|audio| {
-    //         audio.hz = 440.0; // Lower pitch for weak pulse
-    //     })
-    //     .unwrap();
-    //     model.stream.pause().unwrap();
-    // }
 }
 
 fn view(app: &App, model: &Model, frame: Frame) {
     let draw = app.draw();
-
-    // Create a dark "medical" theme
-    draw.background().color(rgb(0.02, 0.02, 0.05));
-
     let win = app.window_rect();
+    
+    draw.background().color(BLACK);
 
-    // 1. Draw a pulsing heart-like glow
-    let radius = 150.0 + (model.pulse * 100.0);
-    let color = rgba(0.9, 0.1, 0.2, 0.1 + (model.pulse * 0.4));
+    // Dynamic grid based on pulse
+    let grid_size = 50.0;
+    let alpha = 0.05 + (model.pulse * 0.1);
+    for i in 0..20 {
+        let x = win.left() + (i as f32 * grid_size * 2.0);
+        draw.line().points(pt2(x, win.top()), pt2(x, win.bottom())).color(rgba(0.0, 1.0, 0.2, alpha));
+    }
 
-    // Outer glow
-    draw.ellipse().color(color).w_h(radius * 1.5, radius * 1.5);
-
-    // Core circle
-    draw.ellipse()
-        .color(rgb(0.8, 0.1, 0.1))
-        .w_h(radius, radius)
-        .stroke(WHITE)
-        .stroke_weight(2.0);
-
-    // 2. Draw the history wave (ECG Style)
+    // ECG Wave
     if model.history.len() > 1 {
         let points = (0..model.history.len()).map(|i| {
-            let x = map_range(i, 0, 300, win.left() + 50.0, win.right() - 50.0);
-            let y = map_range(
-                model.history[i],
-                0.0,
-                1.0,
-                win.bottom() + 150.0,
-                win.bottom() + 350.0,
-            );
+            let x = map_range(i, 0, 500, win.left(), win.right());
+            let y = map_range(model.history[i], 0.0, 1.0, -100.0, 100.0);
             pt2(x, y)
         });
 
         draw.polyline()
-            .weight(3.0)
+            .weight(2.0 + (model.pulse * 5.0))
             .points(points)
             .color(GREENYELLOW);
     }
+
+    // Heart indicator
+    draw.ellipse()
+        .xy(pt2(0.0, 200.0))
+        .radius(50.0 + (model.pulse * 50.0))
+        .color(rgba(1.0, 0.0, 0.1, 0.2 + model.pulse * 0.8))
+        .stroke(WHITE)
+        .stroke_weight(1.0);
 
     draw.to_frame(app, &frame).unwrap();
 }
