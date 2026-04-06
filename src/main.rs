@@ -105,10 +105,11 @@ fn view(app: &App, model: &Model, frame: Frame) {
                     / smooth_window as f32;
                 let radius = map_range(smoothed_sample, 0.0, 1.0, min_radius, max_radius);
 
-                let angle = (vertex as f32 * 360.0 / 3.0 + 90.0).to_radians();
+                let mut angle = (vertex as f32 * 360.0 / 3.0).to_radians();
+                angle += pulse_offset * 0.05;
                 let x = radius * angle.cos();
                 let y = radius * angle.sin();
-                pt2(x, y-80.0)
+                pt2(x, y)
             });
 
             draw.polyline()
