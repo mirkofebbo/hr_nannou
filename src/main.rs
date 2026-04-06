@@ -1,4 +1,5 @@
 use nannou::prelude::*;
+use std::f32::MAX_10_EXP;
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::thread;
@@ -84,20 +85,25 @@ fn view(app: &App, model: &Model, frame: Frame) {
     draw.background().color(BLACK);
 
     // 2. ECG Style Wave
-    const NUM_RINGS: usize = 5;
+    const NUM_RINGS: usize = 20;
     if model.history.len() > 1 {
         for r in 0..NUM_RINGS {
+            let _r = r as f32;
+            let pulse_offset = model.pulse * _r + 1.0; // Adjust pulse influence on radius
             let points = (0..model.history.len()).map(|i| {
-                let radius = map_range(model.history[i], 0.0, 1.0, 100.0, win.w() / 2.0 - 50.0)
-                    - r as f32 * 100.0 + model.pulse * 50.0;
-                let a = (i as f32 * 360.0 / model.history.len() as f32).to_radians();
+                let min_radius = map_range(_r, 0.0, NUM_RINGS as f32, 0.0, win.w() / 2.0);
+                let max_radius = map_range(_r, 0.0, NUM_RINGS as f32, win.w() / 2.0, win.w() / 1.5);
+                let radius = map_range(model.history[i], 0.0, 1.0, min_radius, max_radius);
+                // let a = (i as f32 * 360.0 / model.history.len() as f32 + _r / pulse_offset)
+                let a = (i as f32 * 360.0 / model.history.len() as f32)
+                    .to_radians();
                 let x = radius * a.cos();
                 let y = radius * a.sin();
                 pt2(x, y)
             });
 
             draw.polyline()
-                .weight(2.0 + (model.pulse * 4.0))
+                .weight(pulse_offset)
                 .points(points)
                 .rgba(
                     1.0,
