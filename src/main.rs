@@ -59,7 +59,7 @@ fn model(app: &App) -> Model {
 }
 
 fn update(_app: &App, model: &mut Model, _update: Update) {
-    const SMOOTHING: f32 = 0.12;
+    const SMOOTHING: f32 = 0.02;
 
     while let Ok(data) = model.receiver.try_recv() {
         let range = data.max - data.min;
@@ -105,10 +105,10 @@ fn view(app: &App, model: &Model, frame: Frame) {
                     / smooth_window as f32;
                 let radius = map_range(smoothed_sample, 0.0, 1.0, min_radius, max_radius);
 
-                let angle = (vertex as f32 * 360.0 / 3.0).to_radians();
+                let angle = (vertex as f32 * 360.0 / 3.0 + 90.0).to_radians();
                 let x = radius * angle.cos();
                 let y = radius * angle.sin();
-                pt2(x, y)
+                pt2(x, y-80.0)
             });
 
             draw.polyline()
