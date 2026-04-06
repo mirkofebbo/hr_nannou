@@ -106,7 +106,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
                 let radius = map_range(smoothed_sample, 0.0, 1.0, min_radius, max_radius);
 
                 let mut angle = (vertex as f32 * 360.0 / 3.0).to_radians();
-                angle += j as f32 * 0.1 + app.time * 0.5;
+                angle += j as f32 * app.time * 0.01;
                 let x = radius * angle.cos();
                 let y = radius * angle.sin();
                 pt2(x, y)
