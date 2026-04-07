@@ -97,7 +97,7 @@ fn view(app: &App, model: &Model, frame: Frame) {
                 let max_radius = map_range(j as f32, 0.0, NUM_TRI as f32, win.w() / 2.0, win.w() / 1.5);
 
                 let vertex_offset = (vertex % 3) * history_len / 3;
-                let sample_idx = (triangle_offset + vertex_offset) % history_len;
+                let sample_idx = (triangle_offset + history_len / 3) % history_len;
                 let smooth_window = 6.min(history_len);
                 let smoothed_sample = (0..smooth_window)
                     .map(|k| model.history[(sample_idx + k) % history_len])
@@ -105,11 +105,10 @@ fn view(app: &App, model: &Model, frame: Frame) {
                     / smooth_window as f32;
                 let radius = map_range(smoothed_sample, 0.0, 1.0, min_radius, max_radius);
 
-                let mut angle = (vertex as f32 * 360.0 / 3.0).to_radians();
-                angle += j as f32 * app.time * 0.01;
+                let angle = (vertex as f32 * 360.0 / 3.0 + 30.0).to_radians();
                 let x = radius * angle.cos();
                 let y = radius * angle.sin();
-                pt2(x, y)
+                pt2(x, y+50.0)
             });
 
             draw.polyline()
