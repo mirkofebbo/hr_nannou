@@ -1,8 +1,8 @@
 use nannou::prelude::*;
-use std::f32::MAX_10_EXP;
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 fn main() {
     nannou::app(model).update(update).run();
@@ -20,6 +20,31 @@ struct Model {
     history: Vec<f32>,
 }
 
+fn send_fallback_wave(tx: mpsc::Sender<PulseData>) {
+    eprintln!("Arduino not detected - using a synthetic sine wave instead.");
+
+    let mut phase = 0.0_f32;
+    loop {
+        let wobble = (phase * 0.37).sin() * 0.12;
+        let normalized = (0.5 + 0.3 * phase.sin() + wobble).clamp(0.0, 1.0);
+        let raw = normalized * 1024.0;
+
+        if tx
+            .send(PulseData {
+                min: 0.0,
+                max: 1024.0,
+                raw,
+            })
+            .is_err()
+        {
+            break;
+        }
+
+        phase += 0.08;
+        thread::sleep(Duration::from_millis(16));
+    }
+}
+
 fn model(app: &App) -> Model {
     app.new_window()
         .size(800, 800)
@@ -35,20 +60,41 @@ fn model(app: &App) -> Model {
     let baud_rate = 115200;
 
     thread::spawn(move || {
-        if let Ok(port) = serialport::new(port_name, baud_rate).open() {
-            let mut reader = BufReader::new(port);
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).is_ok() {
-                    let parts: Vec<&str> = line.trim().split(',').collect();
-                    if parts.len() == 3 {
-                        let min = parts[0].parse::<f32>().unwrap_or(0.0);
-                        let max = parts[1].parse::<f32>().unwrap_or(1024.0);
-                        let raw = parts[2].parse::<f32>().unwrap_or(0.0);
-                        let _ = tx.send(PulseData { min, max, raw });
+        let device_connected = serialport::available_ports()
+            .map(|ports| ports.iter().any(|port| port.port_name == port_name))
+            .unwrap_or(false);
+
+        if !device_connected {
+            send_fallback_wave(tx);
+            return;
+        }
+
+        match serialport::new(port_name, baud_rate)
+            .timeout(Duration::from_millis(50))
+            .open()
+        {
+            Ok(port) => {
+                let mut reader = BufReader::new(port);
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            let parts: Vec<&str> = line.trim().split(',').collect();
+                            if parts.len() == 3 {
+                                let min = parts[0].parse::<f32>().unwrap_or(0.0);
+                                let max = parts[1].parse::<f32>().unwrap_or(1024.0);
+                                let raw = parts[2].parse::<f32>().unwrap_or(0.0);
+                                let _ = tx.send(PulseData { min, max, raw });
+                            }
+                        }
+                        Err(_) => break,
                     }
                 }
+
+                send_fallback_wave(tx);
             }
+            Err(_) => send_fallback_wave(tx),
         }
     });
 
