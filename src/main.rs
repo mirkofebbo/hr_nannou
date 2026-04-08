@@ -1,5 +1,4 @@
 use nannou::prelude::*;
-use std::f32::MAX_10_EXP;
 use std::io::{BufRead, BufReader};
 use std::sync::mpsc;
 use std::thread;
@@ -60,6 +59,8 @@ fn model(app: &App) -> Model {
 }
 
 fn update(_app: &App, model: &mut Model, _update: Update) {
+    const SMOOTHING: f32 = 0.02;
+
     while let Ok(data) = model.receiver.try_recv() {
         let range = data.max - data.min;
         let normalized = if range > 1.0 {
@@ -68,10 +69,9 @@ fn update(_app: &App, model: &mut Model, _update: Update) {
             0.0
         };
 
-        model.pulse = normalized;
-        model.history.push(normalized);
+        model.pulse += (normalized - model.pulse) * SMOOTHING;
+        model.history.push(model.pulse);
 
-        // Maintain a history of 500 samples for the wave
         if model.history.len() > 500 {
             model.history.remove(0);
         }
@@ -84,44 +84,44 @@ fn view(app: &App, model: &Model, frame: Frame) {
 
     draw.background().color(BLACK);
 
-    // 2. ECG Style Wave
-    const NUM_RINGS: usize = 20;
-    if model.history.len() > 1 {
-        for r in 0..NUM_RINGS {
-            let _r = r as f32;
-            let pulse_offset = model.pulse * _r + 1.0; // Adjust pulse influence on radius
-            let points = (0..model.history.len()).map(|i| {
-                let min_radius = map_range(_r, 0.0, NUM_RINGS as f32, 0.0, win.w() / 2.0);
-                let max_radius = map_range(_r, 0.0, NUM_RINGS as f32, win.w() / 2.0, win.w() / 1.5);
-                let radius = map_range(model.history[i], 0.0, 1.0, min_radius, max_radius);
-                // let a = (i as f32 * 360.0 / model.history.len() as f32 + _r / pulse_offset)
-                let a = (i as f32 * 360.0 / model.history.len() as f32)
-                    .to_radians();
-                let x = radius * a.cos();
-                let y = radius * a.sin();
-                pt2(x, y)
+    const NUM_TRI: usize = 20;
+    if !model.history.is_empty() {
+        let history_len = model.history.len();
+
+        for j in 0..NUM_TRI {
+            let pulse_offset = model.pulse * j as f32 + 1.0;
+            let triangle_offset = j * (history_len/10) * history_len / NUM_TRI;
+
+            let points = (0..=3).map(|vertex| {
+                let min_radius = map_range(j as f32, 0.0, NUM_TRI as f32, 0.0, win.w() / 2.0);
+                let max_radius = map_range(j as f32, 0.0, NUM_TRI as f32, win.w() / 2.0, win.w() / 1.5);
+
+                let vertex_offset = (vertex % 3) * history_len / 3;
+                let sample_idx = (triangle_offset + history_len / 3) % history_len;
+                let smooth_window = 6.min(history_len);
+                let smoothed_sample = (0..smooth_window)
+                    .map(|k| model.history[(sample_idx + k) % history_len])
+                    .sum::<f32>()
+                    / smooth_window as f32;
+                let radius = map_range(smoothed_sample, 0.0, 1.0, min_radius, max_radius);
+
+                let angle = (vertex as f32 * 360.0 / 3.0 + 30.0).to_radians();
+                let x = radius * angle.cos();
+                let y = radius * angle.sin();
+                pt2(x, y+50.0)
             });
 
             draw.polyline()
-                .weight(pulse_offset)
+                .weight(0.75 + pulse_offset * 0.15)
                 .points(points)
                 .rgba(
                     1.0,
                     1.0,
                     1.0,
-                    map_range(r as f32, 0.0, NUM_RINGS as f32, 0.1, 1.0),
+                    map_range(j as f32, 0.0, NUM_TRI as f32, 0.1, 1.0),
                 );
         }
     }
-
-    // // 3. Central Heart Pulse Indicator
-    // let heart_size = 60.0 + (model.pulse * 60.0);
-    // draw.ellipse()
-    //     .xy(pt2(0.0, 0.0))
-    //     .radius(heart_size)
-    //     .no_fill()
-    //     .stroke(WHITE)
-    //     .stroke_weight(2.0 + (model.pulse * 4.0));
 
     draw.to_frame(app, &frame).unwrap();
 }
